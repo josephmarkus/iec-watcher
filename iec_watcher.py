@@ -47,14 +47,18 @@ CHANCES_LABELS = {
 RETRY_ATTEMPTS = 5
 RETRY_DELAY_SECONDS = 15
 
+# Same fields, order and labels as the daily digest, so the two notifications
+# read alike. chances_label rather than chances_code: the label is 1:1 with the
+# code, so detection is unchanged, but the alert reads "Very low → Low" instead
+# of "5 → 4".
 DIFF_FIELDS = [
-    ("quota", "Quota"),
+    ("chances_label", "Chance"),
     ("spots_available", "Spots available"),
     ("candidates_in_pool", "Candidates in pool"),
+    ("quota", "Quota"),
     ("invitations_issued", "Invited to date"),
     ("first_round_text", "First round"),
     ("final_round_text", "Final round"),
-    ("chances_code", "Chance rating"),
 ]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -196,6 +200,42 @@ def get_last_ok_snapshot(conn):
     return conn.execute("SELECT * FROM snapshots WHERE ok = 1 ORDER BY id DESC LIMIT 1").fetchone()
 
 
+def parse_data_as_of(text):
+    """Parse IRCC's "August 07, 2026" stamp into a date, or None if unparseable."""
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text.strip(), "%B %d, %Y").date()
+    except ValueError:
+        log.warning("Could not parse data_as_of_text %r", text)
+        return None
+
+
+def get_baseline_snapshot(conn, limit=90):
+    """Return the stored snapshot carrying the freshest IRCC dataset.
+
+    Not simply the newest row: IRCC intermittently serves a stale XML (observed
+    2026-07-28/29, when the July 24 dataset reverted to July 17 for two days).
+    Diffing against the last row would then report the regression, and report
+    the re-advance again once the stale copy cleared — two alerts, no real news.
+    Diffing against the freshest dataset seen so far reports neither.
+
+    Ties keep the most recently scraped row. Rows with an unparseable stamp are
+    skipped; if none can be parsed we fall back to the newest row.
+    """
+    rows = conn.execute(
+        "SELECT * FROM snapshots WHERE ok = 1 ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    best, best_date = None, None
+    for row in rows:
+        row_date = parse_data_as_of(row["data_as_of_text"])
+        if row_date is not None and (best_date is None or row_date > best_date):
+            best, best_date = row, row_date
+    if best is not None:
+        return best
+    return rows[0] if rows else None
+
+
 def digest_already_sent_today(conn, today_str):
     row = conn.execute(
         "SELECT 1 FROM snapshots WHERE ok = 1 AND digest_sent = 1 AND substr(scraped_at_utc, 1, 10) = ? LIMIT 1",
@@ -254,6 +294,16 @@ def build_digest_message(current):
     )
 
 
+def build_change_message(current, diffs):
+    def render(value):
+        return format_int(value) if isinstance(value, int) else value
+
+    return "\n".join(
+        [f"{current['data_as_of_text']}"]
+        + [f"{label}: {render(prev)} → {render(cur)}" for label, prev, cur in diffs]
+    )
+
+
 def compute_diffs(previous, current):
     if previous is None:
         return []
@@ -268,7 +318,11 @@ def compute_diffs(previous, current):
 
 def run(config, conn, notify):
     scraped_at = datetime.now(timezone.utc).isoformat()
+    # previous drives the HTML-derived comparisons (season banner, pool status);
+    # baseline drives the XML-derived figure diffs. They are the same row unless
+    # IRCC is currently serving a stale XML.
     previous = get_last_ok_snapshot(conn)
+    baseline = get_baseline_snapshot(conn)
 
     try:
         html_bytes, _ = fetch(
@@ -325,18 +379,26 @@ def run(config, conn, notify):
     if prev_status is not None and prev_status != current["pool_status"]:
         notify(
             f"{TITLE_PREFIX} — pool status changed",
-            f"Pool status: {prev_status} → {current['pool_status']}",
+            f"Status: {prev_status} → {current['pool_status']}",
             priority="high",
             click=config["target_page_url"],
         )
 
-    diffs = compute_diffs(previous, current)
+    current_date = parse_data_as_of(current["data_as_of_text"])
+    baseline_date = parse_data_as_of(baseline["data_as_of_text"]) if baseline is not None else None
+    stale = current_date is not None and baseline_date is not None and current_date < baseline_date
+    if stale:
+        log.warning(
+            "Stale IRCC data: served %s, already have %s — suppressing change alert",
+            current_date,
+            baseline_date,
+        )
+
+    diffs = [] if stale else compute_diffs(baseline, current)
     if diffs:
-        body = "\n".join(f"{label}: {format_int(prev) if isinstance(prev, int) else prev} → "
-                          f"{format_int(cur) if isinstance(cur, int) else cur}" for label, prev, cur in diffs)
         notify(
             f"{TITLE_PREFIX} — change detected",
-            body,
+            build_change_message(current, diffs),
             priority="high",
             click=config["target_page_url"],
         )
