@@ -1,0 +1,22 @@
+iec.db is a SQLite database. It has one table: snapshots (one row per
+scrape run of the IEC UK Working Holiday pool page).
+
+View it with the sqlite3 CLI (already installed on macOS) — run from this
+db/ folder, or adjust the path to iec.db accordingly:
+
+  # Latest row, one field per line (easiest to read)
+  sqlite3 iec.db ".mode line" "SELECT * FROM snapshots ORDER BY id DESC LIMIT 1;"
+
+  # All rows, compact table view of the key columns
+  sqlite3 iec.db ".headers on" ".mode column" "SELECT id, scraped_at_utc, pool_status, spots_available, candidates_in_pool, chances_label FROM snapshots ORDER BY id;"
+
+  # Just check for scrape failures
+  sqlite3 iec.db "SELECT scraped_at_utc, error_message FROM snapshots WHERE ok = 0;"
+
+  # Interactive session
+  sqlite3 iec.db
+  (then: .tables | .schema snapshots | SELECT ...; | .quit)
+
+GUI alternative:
+  brew install --cask db-browser-for-sqlite
+  Then just open iec.db in it.

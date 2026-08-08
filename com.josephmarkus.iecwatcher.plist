@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.josephmarkus.iecwatcher</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/josephmarkus/Projects/iec-watcher/iec_watcher.py</string>
+        <string>--once</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/josephmarkus/Projects/iec-watcher</string>
+
+    <!-- Fires daily at 16:00 local time (Europe/London), chosen to land
+         comfortably after IRCC's observed data-refresh window. Paired with
+         `sudo pmset repeat wake` (set up once, separately) so the Mac Mini
+         is actually awake at this time even if it was asleep. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>16</integer>
+        <key>Minute</key>
+        <integer>5</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/josephmarkus/Projects/iec-watcher/logs/iec-watcher.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/josephmarkus/Projects/iec-watcher/logs/iec-watcher.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
