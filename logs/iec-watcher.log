@@ -35,3 +35,7 @@
 2026-08-08 16:08:28,281 INFO Inserted snapshot id=17 ok=1
 2026-08-08 16:08:43,648 INFO Sent ntfy notification: IEC UK WH — change detected
 2026-08-08 16:08:59,020 INFO Sent ntfy notification: IEC UK Working Holiday — daily
+2026-08-09 16:05:06,435 INFO Inserted snapshot id=19 ok=1
+2026-08-09 16:05:21,828 INFO Sent ntfy notification: Canada — daily
+2026-08-10 16:17:58,329 INFO Inserted snapshot id=20 ok=1
+2026-08-10 16:17:58,692 INFO Sent ntfy notification: Canada — daily

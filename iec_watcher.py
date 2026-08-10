@@ -35,6 +35,11 @@ USER_AGENT = "iec-watcher/1.0 (personal pool-status monitor)"
 # ntfy "Tags" header is sent — ntfy renders known tags as emoji in the title.
 TITLE_PREFIX = "Canada"
 
+# No ntfy "Click" header is sent anywhere in this script, deliberately. With no
+# click action, tapping a notification opens the ntfy app on the topic, where
+# the full history of alerts is; a Click URL would instead hand off to the
+# browser and lose that. Don't add one back without wanting that trade.
+
 CHANCES_LABELS = {
     0: "Not applicable",
     1: "Excellent",
@@ -257,11 +262,9 @@ def mark_digest_sent(conn, row_id):
     conn.commit()
 
 
-def send_ntfy(config, title, body, priority="default", click=None):
+def send_ntfy(config, title, body, priority="default"):
     url = f"{config['ntfy_base_url'].rstrip('/')}/{config['ntfy_topic']}"
     headers = {"Title": title.encode("utf-8"), "Priority": priority.encode("utf-8")}
-    if click:
-        headers["Click"] = click.encode("utf-8")
 
     req = urllib.request.Request(url, data=body.encode("utf-8"), headers=headers, method="POST")
     try:
@@ -278,7 +281,56 @@ def format_int(n):
     return f"{n:,}" if isinstance(n, int) else "?"
 
 
-def build_digest_message(current):
+def format_as_of_date(date_obj, today):
+    """Render a data-as-of date the way it would be spoken: "7 August".
+
+    The year is appended only when it isn't the current one, which in practice
+    means only around a season rollover.
+    """
+    stem = f"{date_obj.day} {date_obj.strftime('%B')}"
+    return stem if date_obj.year == today.year else f"{stem} {date_obj.year}"
+
+
+def format_days_ago(date_obj, today):
+    days = (today - date_obj).days
+    if days <= 0:
+        return "today"
+    if days == 1:
+        return "yesterday"
+    return f"{days} days ago"
+
+
+def is_unchanged(baseline, current):
+    """True when this snapshot carries the same IRCC dataset as the baseline.
+
+    Requires the as-of stamp to match as well as the figures: IRCC restating the
+    same numbers under a newer stamp is news (it means a fresh publication that
+    happened to move nothing), so that case still gets the full listing.
+    """
+    if baseline is None:
+        return False
+    if baseline["data_as_of_text"] != current["data_as_of_text"]:
+        return False
+    if baseline["pool_status"] != current["pool_status"]:
+        return False
+    return not compute_diffs(baseline, current)
+
+
+def build_digest_message(current, baseline=None):
+    """The full field listing, or a one-liner when nothing has moved.
+
+    IRCC refreshes this dataset weekly, so most days the digest would repeat
+    yesterday's figures verbatim — which trains you to swipe the notification
+    away unread, exactly when a real change needs to catch your eye.
+    """
+    as_of = parse_data_as_of(current["data_as_of_text"])
+    if is_unchanged(baseline, current) and as_of is not None:
+        today = datetime.now().date()
+        return (
+            f"Data is unchanged since {format_as_of_date(as_of, today)} "
+            f"({format_days_ago(as_of, today)})"
+        )
+
     return "\n".join(
         [
             f"{current['data_as_of_text']}",
@@ -372,7 +424,6 @@ def run(config, conn, notify):
             f"Banner changed from \"{prev_year}\" to \"{current['season_year']}\":\n"
             f"{current['season_banner_text']}\nGo check now.",
             priority="urgent",
-            click=config["target_page_url"],
         )
 
     prev_status = previous["pool_status"] if previous is not None else None
@@ -381,7 +432,6 @@ def run(config, conn, notify):
             f"{TITLE_PREFIX} — pool status changed",
             f"Status: {prev_status} → {current['pool_status']}",
             priority="high",
-            click=config["target_page_url"],
         )
 
     current_date = parse_data_as_of(current["data_as_of_text"])
@@ -400,16 +450,14 @@ def run(config, conn, notify):
             f"{TITLE_PREFIX} — change detected",
             build_change_message(current, diffs),
             priority="high",
-            click=config["target_page_url"],
         )
 
     today_str = scraped_at[:10]
     if not digest_already_sent_today(conn, today_str):
         sent = notify(
             f"{TITLE_PREFIX} — daily",
-            build_digest_message(current),
+            build_digest_message(current, baseline),
             priority="default",
-            click=config["target_page_url"],
         )
         if sent:
             mark_digest_sent(conn, row_id)
@@ -431,11 +479,11 @@ def main():
     conn.row_factory = sqlite3.Row
     init_db(conn)
 
-    def notify(title, body, priority="default", click=None):
+    def notify(title, body, priority="default"):
         if args.dry_run:
             log.info("[DRY RUN] %s | %s", title, body.replace("\n", " / "))
             return False
-        return send_ntfy(config, title, body, priority=priority, click=click)
+        return send_ntfy(config, title, body, priority=priority)
 
     ok = run(config, conn, notify)
     conn.close()
