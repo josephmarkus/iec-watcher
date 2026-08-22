@@ -23,7 +23,7 @@ echo "Installed plist -> ${DEST_PLIST}"
 launchctl bootout "gui/${UID_NUM}" "${DEST_PLIST}" >/dev/null 2>&1 || true
 
 launchctl bootstrap "gui/${UID_NUM}" "${DEST_PLIST}"
-echo "Loaded LaunchAgent com.josephmarkus.iecwatcher (fires daily at 16:05 Europe/London)."
+echo "Loaded LaunchAgent com.josephmarkus.iecwatcher (fires daily at 21:45 Europe/London)."
 
 echo
 echo "== ntfy.sh =="
@@ -34,10 +34,10 @@ echo "(Or scan/visit: https://ntfy.sh/${TOPIC})"
 
 echo
 echo "== One remaining manual step =="
-echo "For the Mac to actually be AWAKE at 16:05 even if it's asleep, schedule a"
+echo "For the Mac to actually be AWAKE at 21:45 even if it's asleep, schedule a"
 echo "recurring hardware wake. This needs sudo and only needs to be run ONCE"
 echo "(it persists across reboots). Run it yourself when ready:"
 echo
-echo "    sudo pmset repeat wake MTWRFSU 16:00:00"
+echo "    sudo pmset repeat wake MTWRFSU 21:40:00"
 echo
 echo "Verify afterwards with: pmset -g sched"

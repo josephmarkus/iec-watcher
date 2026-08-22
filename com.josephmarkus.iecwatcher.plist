@@ -15,16 +15,23 @@
     <key>WorkingDirectory</key>
     <string>/Users/josephmarkus/Projects/iec-watcher</string>
 
-    <!-- Fires daily at 16:00 local time (Europe/London), chosen to land
-         comfortably after IRCC's observed data-refresh window. Paired with
-         `sudo pmset repeat wake` (set up once, separately) so the Mac Mini
-         is actually awake at this time even if it was asleep. -->
+    <!-- Fires daily at 21:45 local time (Europe/London). IRCC publishes weekly
+         on Fridays, but at a time that drifts across the Ottawa working day:
+         over 2026-07-17..08-21 the XML's Last-Modified landed anywhere from
+         10:15 to 15:51 ET. The old 16:05 slot (11:05 ET) sat inside that
+         window and missed 5 of 6 publications, each costing ~a day's notice.
+         21:45 London is 16:45 ET — past the latest observed publication with
+         roughly an hour of CDN-propagation margin. London and Ottawa are 5
+         hours apart year-round bar the 25 Oct - 1 Nov week, when the gap
+         narrows to 4 and this slot merely lands later still. Paired with
+         `sudo pmset repeat wake` (set up once, separately) so the Mac Mini is
+         actually awake at this time even if it was asleep. -->
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key>
-        <integer>16</integer>
+        <integer>21</integer>
         <key>Minute</key>
-        <integer>5</integer>
+        <integer>45</integer>
     </dict>
 
     <key>StandardOutPath</key>
@@ -32,7 +39,13 @@
     <key>StandardErrorPath</key>
     <string>/Users/josephmarkus/Projects/iec-watcher/logs/iec-watcher.log</string>
 
+    <!-- pmset can wake a sleeping Mac but cannot power on one that is off, so
+         a shutdown spanning 21:45 skips that day outright (observed: powered
+         down 11 Aug 21:59 to 12 Aug 21:17, no run on the 12th). Running at
+         load means the next boot picks the missed day back up. The extra runs
+         this causes are cheap and near-always silent, since notifications now
+         fire only when IRCC has published something new. -->
     <key>RunAtLoad</key>
-    <false/>
+    <true/>
 </dict>
 </plist>
