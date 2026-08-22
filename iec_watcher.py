@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Scrape the IRCC IEC pool page for one country/category, store a snapshot in
-SQLite, and push ntfy.sh notifications for daily digests, detected changes,
-season rollovers, and scrape failures.
+SQLite, and push ntfy.sh notifications for new data publications, detected
+changes, season rollovers, and scrape failures.
 
 No third-party dependencies — stdlib only, so it can run under the system
 python3 with no venv/pip setup (important for an unattended launchd job).
@@ -29,6 +29,17 @@ HTML_URL_TEMPLATE = "https://ircc.canada.ca/english/work/iec/selections.asp?coun
 XML_URL = "https://ircc.canada.ca/english/work/iec/selections.xml"
 
 USER_AGENT = "iec-watcher/1.0 (personal pool-status monitor)"
+
+# no-cache asks the CDN in front of ircc.canada.ca to revalidate against the
+# origin rather than hand back whatever its edge node last cached. Observed
+# 2026-07-24: a fetch 9 minutes AFTER the XML's own Last-Modified still served
+# the previous week's copy, which cost a full day's notice. Pragma is the
+# HTTP/1.0 spelling, sent for any intermediary that ignores Cache-Control.
+REQUEST_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+}
 
 # Every notification shares this prefix so the alerts group together and read
 # consistently. Notifications are deliberately emoji-free, which is also why no
@@ -84,7 +95,7 @@ def fetch(url, retries=RETRY_ATTEMPTS, delay=RETRY_DELAY_SECONDS):
     last_error = None
     for attempt in range(1, retries + 1):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            req = urllib.request.Request(url, headers=REQUEST_HEADERS)
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return resp.read(), dict(resp.headers)
         except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
@@ -281,23 +292,25 @@ def format_int(n):
     return f"{n:,}" if isinstance(n, int) else "?"
 
 
-def format_as_of_date(date_obj, today):
-    """Render a data-as-of date the way it would be spoken: "7 August".
+def format_data_stamp(current):
+    """The dataset's stamp, rendered with time of day and zone.
 
-    The year is appended only when it isn't the current one, which in practice
-    means only around a season rollover.
+    IRCC's own <chancesdate> stamp is date-only ("August 21, 2026"), which
+    can't separate two publications on the same day and hides how fresh the
+    figures actually are. The XML's HTTP Last-Modified carries the publication
+    time, so it is preferred, converted to whatever zone this machine is in so
+    it reads against your own clock. The date-only stamp stays as the fallback
+    for when the header is missing or unparseable.
     """
-    stem = f"{date_obj.day} {date_obj.strftime('%B')}"
-    return stem if date_obj.year == today.year else f"{stem} {date_obj.year}"
-
-
-def format_days_ago(date_obj, today):
-    days = (today - date_obj).days
-    if days <= 0:
-        return "today"
-    if days == 1:
-        return "yesterday"
-    return f"{days} days ago"
+    raw = current.get("xml_last_modified_utc")
+    if raw:
+        try:
+            local = datetime.fromisoformat(raw).astimezone()
+        except ValueError:
+            log.warning("Could not parse xml_last_modified_utc %r", raw)
+        else:
+            return f"{local.day} {local:%B %Y, %H:%M %Z}"
+    return current["data_as_of_text"]
 
 
 def is_unchanged(baseline, current):
@@ -316,24 +329,18 @@ def is_unchanged(baseline, current):
     return not compute_diffs(baseline, current)
 
 
-def build_digest_message(current, baseline=None):
-    """The full field listing, or a one-liner when nothing has moved.
+def build_digest_message(current):
+    """The full field listing for a freshly published IRCC dataset.
 
-    IRCC refreshes this dataset weekly, so most days the digest would repeat
-    yesterday's figures verbatim — which trains you to swipe the notification
-    away unread, exactly when a real change needs to catch your eye.
+    Only sent when the data actually moved — see run(). IRCC refreshes this
+    dataset weekly, so a genuinely daily digest repeated the same figures six
+    days out of seven, which trains you to swipe the notification away unread,
+    exactly when a real change needs to catch your eye. Unchanged days are
+    still scraped and still stored; they just no longer notify.
     """
-    as_of = parse_data_as_of(current["data_as_of_text"])
-    if is_unchanged(baseline, current) and as_of is not None:
-        today = datetime.now().date()
-        return (
-            f"Data is unchanged since {format_as_of_date(as_of, today)} "
-            f"({format_days_ago(as_of, today)})"
-        )
-
     return "\n".join(
         [
-            f"{current['data_as_of_text']}",
+            format_data_stamp(current),
             f"Status: {current['pool_status']}",
             f"Chance: {current['chances_label']}",
             f"Spots available: {format_int(current['spots_available'])}",
@@ -351,7 +358,7 @@ def build_change_message(current, diffs):
         return format_int(value) if isinstance(value, int) else value
 
     return "\n".join(
-        [f"{current['data_as_of_text']}"]
+        [format_data_stamp(current)]
         + [f"{label}: {render(prev)} → {render(cur)}" for label, prev, cur in diffs]
     )
 
@@ -452,11 +459,20 @@ def run(config, conn, notify):
             priority="high",
         )
 
+    # The listing goes out only when IRCC has actually published something new.
+    # `stale` is included because a stale serve reaches this point looking like
+    # a change (an older as-of stamp differs from the baseline's), and notifying
+    # on it would announce last week's figures as fresh news.
     today_str = scraped_at[:10]
-    if not digest_already_sent_today(conn, today_str):
+    if stale or is_unchanged(baseline, current):
+        log.info(
+            "No new IRCC data (as of %s) — notification suppressed, snapshot still stored",
+            current["data_as_of_text"],
+        )
+    elif not digest_already_sent_today(conn, today_str):
         sent = notify(
-            f"{TITLE_PREFIX} — daily",
-            build_digest_message(current, baseline),
+            f"{TITLE_PREFIX} — data updated",
+            build_digest_message(current),
             priority="default",
         )
         if sent:
