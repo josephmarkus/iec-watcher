@@ -153,10 +153,27 @@ def parse_xml(xml_bytes, headers, country_code, category_code):
         return el.text.strip() if el is not None and el.text else None
 
     def int_of(tag):
+        """The tag as an int, or its raw text when IRCC hasn't published a number.
+
+        Between seasons IRCC replaces the figures with placeholders such as
+        "To be announced" (first seen in the 2026-11-06 dataset). Keeping the
+        text, rather than crashing or collapsing it to None, means the alert
+        reads "Quota: 9,346 → To be announced" and the switch back to real
+        numbers is detected as a change too. SQLite stores the text as-is in
+        the INTEGER columns.
+        """
         raw = text_of(tag)
-        return int(raw.replace(",", "")) if raw is not None else None
+        if raw is None:
+            return None
+        try:
+            return int(raw.replace(",", ""))
+        except ValueError:
+            log.debug("Non-numeric <%s> in IRCC XML: %r", tag, raw)
+            return raw
 
     chances_code = int_of("chances")
+    if not isinstance(chances_code, int):
+        chances_code = None
 
     xml_last_modified_utc = None
     last_modified_raw = headers.get("Last-Modified")
@@ -289,7 +306,9 @@ def send_ntfy(config, title, body, priority="default"):
 
 
 def format_int(n):
-    return f"{n:,}" if isinstance(n, int) else "?"
+    if isinstance(n, int):
+        return f"{n:,}"
+    return n if isinstance(n, str) else "?"
 
 
 def format_data_stamp(current):
